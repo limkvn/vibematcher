@@ -595,13 +595,136 @@ function buildLuminanceLUT(srcLab, refLab) {
   return lut;
 }
 
-/* ---------- Gaussian-weighted chroma stats per tier ---------- */
+/* ---------- Gaussian-weighted chroma stats ---------- *
+ * Two granularities:
+ *   chromaStats3()   -> 3 luminance tiers, captures split-toning for near-gray pixels
+ *   chromaStats18()  -> 3 L-tiers × 6 hue buckets, captures per-hue adjustments
+ *                       (Lightroom-HSL style: "mute the greens, boost the blues")
+ * The main transform blends these two: chromatic pixels use the hue-aware stats,
+ * near-gray pixels fall back to L-tier only (so skies with no chroma can still
+ * pick up color casts). */
 const TIER_CENTERS = [20, 55, 85];
 const TIER_SIGMA = 22;
+const HUE_CENTERS = [0, 60, 120, 180, 240, 300]; // degrees
+const HUE_SIGMA = 36;
+const N_L = 3, N_H = 6, N_BUCKETS = N_L * N_H;
 
 function gaussW(L, k) {
   const x = (L - TIER_CENTERS[k]) / TIER_SIGMA;
   return Math.exp(-0.5 * x * x);
+}
+function hueW(hDeg, m) {
+  let d = Math.abs(hDeg - HUE_CENTERS[m]);
+  if (d > 180) d = 360 - d;   // wrap around the hue circle
+  return Math.exp(-0.5 * (d / HUE_SIGMA) ** 2);
+}
+// Skin-tone likelihood in Lab (a~15, b~25 with broad spreads). Returns 0..1.
+function skinLikelihood(a, b) {
+  const da = (a - 15) / 14;
+  const db = (b - 25) / 20;
+  return Math.exp(-0.5 * (da * da + db * db));
+}
+
+function chromaStats3(labArr) {
+  // (same as the old chromaStats — 3-tier)
+  const sW = [0,0,0], sA = [0,0,0], sB = [0,0,0];
+  for (let j = 0; j < labArr.length; j += 3) {
+    const L = labArr[j], a = labArr[j+1], b = labArr[j+2];
+    for (let k = 0; k < 3; k++) {
+      const w = gaussW(L, k);
+      sW[k] += w; sA[k] += w * a; sB[k] += w * b;
+    }
+  }
+  const mA = [sA[0]/sW[0], sA[1]/sW[1], sA[2]/sW[2]];
+  const mB = [sB[0]/sW[0], sB[1]/sW[1], sB[2]/sW[2]];
+  const vA = [0,0,0], vB = [0,0,0];
+  for (let j = 0; j < labArr.length; j += 3) {
+    const L = labArr[j], a = labArr[j+1], b = labArr[j+2];
+    for (let k = 0; k < 3; k++) {
+      const w = gaussW(L, k);
+      vA[k] += w * (a - mA[k]) ** 2; vB[k] += w * (b - mB[k]) ** 2;
+    }
+  }
+  return [0,1,2].map(k => ({
+    meanA: mA[k], meanB: mB[k],
+    stdA: Math.sqrt(vA[k]/sW[k]), stdB: Math.sqrt(vB[k]/sW[k]),
+  }));
+}
+
+function chromaStats18(labArr) {
+  // Weighted by (L-tier × hue-bucket × chroma-magnitude). Near-gray pixels are
+  // excluded from hue stats since their hue angle is numerically unstable.
+  const N = N_BUCKETS;
+  const sW = new Float64Array(N), sA = new Float64Array(N), sB = new Float64Array(N);
+  const R2D = 180 / Math.PI;
+  // Pass 1: means
+  for (let j = 0; j < labArr.length; j += 3) {
+    const L = labArr[j], a = labArr[j+1], b = labArr[j+2];
+    const c2 = a*a + b*b;
+    if (c2 < 4) continue;                          // chroma < 2 → treat as gray
+    const cw = Math.min(1, Math.sqrt(c2) / 10);
+    const hr = Math.atan2(b, a) * R2D;
+    const hD = hr < 0 ? hr + 360 : hr;
+    for (let k = 0; k < N_L; k++) {
+      const wL = gaussW(L, k);
+      if (wL < 0.01) continue;
+      for (let mBucket = 0; mBucket < N_H; mBucket++) {
+        const w = wL * hueW(hD, mBucket) * cw;
+        const idx = k * N_H + mBucket;
+        sW[idx] += w; sA[idx] += w * a; sB[idx] += w * b;
+      }
+    }
+  }
+  const mA = new Float64Array(N), mB = new Float64Array(N);
+  for (let i = 0; i < N; i++) {
+    mA[i] = sW[i] > 0 ? sA[i] / sW[i] : 0;
+    mB[i] = sW[i] > 0 ? sB[i] / sW[i] : 0;
+  }
+  // Pass 2: variance
+  const vA = new Float64Array(N), vB = new Float64Array(N);
+  for (let j = 0; j < labArr.length; j += 3) {
+    const L = labArr[j], a = labArr[j+1], b = labArr[j+2];
+    const c2 = a*a + b*b;
+    if (c2 < 4) continue;
+    const cw = Math.min(1, Math.sqrt(c2) / 10);
+    const hr = Math.atan2(b, a) * R2D;
+    const hD = hr < 0 ? hr + 360 : hr;
+    for (let k = 0; k < N_L; k++) {
+      const wL = gaussW(L, k);
+      if (wL < 0.01) continue;
+      for (let mBucket = 0; mBucket < N_H; mBucket++) {
+        const w = wL * hueW(hD, mBucket) * cw;
+        const idx = k * N_H + mBucket;
+        vA[idx] += w * (a - mA[idx]) ** 2;
+        vB[idx] += w * (b - mB[idx]) ** 2;
+      }
+    }
+  }
+  const stdA = new Float64Array(N), stdB = new Float64Array(N);
+  for (let i = 0; i < N; i++) {
+    stdA[i] = sW[i] > 0 ? Math.sqrt(vA[i] / sW[i]) : 0;
+    stdB[i] = sW[i] > 0 ? Math.sqrt(vB[i] / sW[i]) : 0;
+  }
+  return { meanA: mA, meanB: mB, stdA, stdB, weights: sW };
+}
+
+// Gaussian-smooth a monotonic LUT to reduce posterization from histogram quantization.
+// Preserves monotonicity (positive-weighted average of a monotonic sequence stays monotonic).
+function smoothLUT(lut, radius = 3) {
+  const n = lut.length;
+  const out = new Float32Array(n);
+  const sigma = Math.max(1, radius);
+  const ws = [];
+  for (let d = -radius; d <= radius; d++) ws.push(Math.exp(-0.5 * (d / sigma) ** 2));
+  for (let i = 0; i < n; i++) {
+    let s = 0, w = 0;
+    for (let d = -radius, t = 0; d <= radius; d++, t++) {
+      const j = Math.max(0, Math.min(n - 1, i + d));
+      s += lut[j] * ws[t]; w += ws[t];
+    }
+    out[i] = s / w;
+  }
+  return out;
 }
 
 function chromaStats(labArr) {
@@ -674,56 +797,144 @@ function postExposureCorrection(outLab, srcLab) {
 }
 
 /* ---------- Main vibe-match transform ---------- */
-// Maximum ratio for chroma std transfer. Prevents runaway saturation
-// when the reference is much more saturated than the source in some tier.
+// Maximum ratio for chroma std transfer. Prevents runaway saturation when the
+// reference is much more saturated than the source in some tier/hue.
 const CHROMA_CAP = 2.5;
+
+/* Gamut-safe Lab → sRGB conversion.
+ * If the pixel's chroma pushes any channel out of the 0..1 linear-RGB range,
+ * binary-search a chroma scale factor that brings it back in-gamut. This
+ * preserves hue exactly (we only reduce saturation, not rotation), vs naive
+ * per-channel clipping which creates color shifts on bright saturated areas. */
+function _labToLinRgb(L, a, b) {
+  const fy = (L + 16) / 116;
+  const fx = a / 500 + fy;
+  const fz = fy - b / 200;
+  const X = Xn * f_inv(fx), Y = Yn * f_inv(fy), Z = Zn * f_inv(fz);
+  return [
+    X *  3.2404542 + Y * -1.5371385 + Z * -0.4985314,
+    X * -0.9692660 + Y *  1.8760108 + Z *  0.0415560,
+    X *  0.0556434 + Y * -0.2040259 + Z *  1.0572252,
+  ];
+}
+function _inGamut(rgb) {
+  return rgb[0] >= 0 && rgb[0] <= 1 && rgb[1] >= 0 && rgb[1] <= 1 && rgb[2] >= 0 && rgb[2] <= 1;
+}
+function _toSrgbByte(c) {
+  const s = c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1/2.4) - 0.055;
+  // ±0.5 dither breaks faint banding from 8-bit quantization
+  const v = s * 255 + (Math.random() - 0.5);
+  return Math.max(0, Math.min(255, Math.round(v)));
+}
+function labToRgbSafe(L, a, b) {
+  let rgb = _labToLinRgb(L, a, b);
+  if (!_inGamut(rgb)) {
+    let lo = 0, hi = 1;
+    for (let i = 0; i < 8; i++) {
+      const mid = (lo + hi) / 2;
+      const test = _labToLinRgb(L, a * mid, b * mid);
+      if (_inGamut(test)) lo = mid; else hi = mid;
+    }
+    rgb = _labToLinRgb(L, a * lo, b * lo);
+    // Final safety clamp (binary search may leave tiny overshoots)
+    rgb[0] = Math.max(0, Math.min(1, rgb[0]));
+    rgb[1] = Math.max(0, Math.min(1, rgb[1]));
+    rgb[2] = Math.max(0, Math.min(1, rgb[2]));
+  }
+  return [_toSrgbByte(rgb[0]), _toSrgbByte(rgb[1]), _toSrgbByte(rgb[2])];
+}
 
 function vibeMatch(sourceImageData, refImageData, strength, protectExposure) {
   const srcLab = rgbaToLabFloat(sourceImageData.data);
   const refLab = rgbaToLabFloat(refImageData.data);
 
-  const lutL = buildLuminanceLUT(srcLab, refLab);
-  const S = chromaStats(srcLab);
-  const R = chromaStats(refLab);
-  const safe = (x) => x < 1e-3 ? 1e-3 : x;
-  const capped = (num, den) => Math.min(CHROMA_CAP, num / safe(den));
+  // Luminance: histogram match (smoothed to reduce banding)
+  let lutL = buildLuminanceLUT(srcLab, refLab);
+  lutL = smoothLUT(lutL, 3);
 
-  // Precompute per-tier chroma scale factors (capped)
-  const sA = [capped(R[0].stdA, S[0].stdA), capped(R[1].stdA, S[1].stdA), capped(R[2].stdA, S[2].stdA)];
-  const sB = [capped(R[0].stdB, S[0].stdB), capped(R[1].stdB, S[1].stdB), capped(R[2].stdB, S[2].stdB)];
+  // Two sets of chroma stats
+  const S3 = chromaStats3(srcLab);
+  const R3 = chromaStats3(refLab);
+  const S18 = chromaStats18(srcLab);
+  const R18 = chromaStats18(refLab);
 
-  // Transform into a Lab float buffer first, so we can post-process L freely
+  const safe = x => x < 1e-3 ? 1e-3 : x;
+
+  // Precompute scales
+  const s3_sA = [0,1,2].map(k => Math.min(CHROMA_CAP, R3[k].stdA / safe(S3[k].stdA)));
+  const s3_sB = [0,1,2].map(k => Math.min(CHROMA_CAP, R3[k].stdB / safe(S3[k].stdB)));
+  const s18_sA = new Float64Array(N_BUCKETS), s18_sB = new Float64Array(N_BUCKETS);
+  // Pixel threshold below which a bucket's stats are too sparse to trust
+  const MIN_BUCKET_WEIGHT = (srcLab.length / 3) * 0.0005;
+  for (let i = 0; i < N_BUCKETS; i++) {
+    if (S18.weights[i] > MIN_BUCKET_WEIGHT && R18.weights[i] > MIN_BUCKET_WEIGHT) {
+      s18_sA[i] = Math.min(CHROMA_CAP, R18.stdA[i] / safe(S18.stdA[i]));
+      s18_sB[i] = Math.min(CHROMA_CAP, R18.stdB[i] / safe(S18.stdB[i]));
+    }
+  }
+
   const outLab = new Float32Array(srcLab.length);
+  const R2D = 180 / Math.PI;
 
   for (let j = 0; j < srcLab.length; j += 3) {
     const L = srcLab[j], a = srcLab[j+1], b = srcLab[j+2];
     const Lm = lutL[L_TO_BIN(L)];
 
-    const w0 = gaussW(L, 0), w1 = gaussW(L, 1), w2 = gaussW(L, 2);
-    const wS = w0 + w1 + w2;
-    const aT =
-      (w0 * ((a - S[0].meanA) * sA[0] + R[0].meanA) +
-       w1 * ((a - S[1].meanA) * sA[1] + R[1].meanA) +
-       w2 * ((a - S[2].meanA) * sA[2] + R[2].meanA)) / wS;
-    const bT =
-      (w0 * ((b - S[0].meanB) * sB[0] + R[0].meanB) +
-       w1 * ((b - S[1].meanB) * sB[1] + R[1].meanB) +
-       w2 * ((b - S[2].meanB) * sB[2] + R[2].meanB)) / wS;
+    // --- 3-tier target (always computed, good for near-gray pixels) ---
+    const wL0 = gaussW(L, 0), wL1 = gaussW(L, 1), wL2 = gaussW(L, 2);
+    const wLs = wL0 + wL1 + wL2;
+    const aL =
+      (wL0 * ((a - S3[0].meanA) * s3_sA[0] + R3[0].meanA) +
+       wL1 * ((a - S3[1].meanA) * s3_sA[1] + R3[1].meanA) +
+       wL2 * ((a - S3[2].meanA) * s3_sA[2] + R3[2].meanA)) / wLs;
+    const bL =
+      (wL0 * ((b - S3[0].meanB) * s3_sB[0] + R3[0].meanB) +
+       wL1 * ((b - S3[1].meanB) * s3_sB[1] + R3[1].meanB) +
+       wL2 * ((b - S3[2].meanB) * s3_sB[2] + R3[2].meanB)) / wLs;
 
-    // Blend with original by strength
+    // --- 18-bucket target (hue-aware, applies for chromatic pixels) ---
+    const c2 = a * a + b * b;
+    const hueBlend = Math.min(1, Math.sqrt(c2) / 15); // 0=gray, 1=chromatic
+    let aH = aL, bH = bL;
+    if (hueBlend > 0.05) {
+      const hr = Math.atan2(b, a) * R2D;
+      const hD = hr < 0 ? hr + 360 : hr;
+      let sumA = 0, sumB = 0, sumW = 0;
+      for (let k = 0; k < N_L; k++) {
+        const wLL = [wL0, wL1, wL2][k];
+        if (wLL < 0.01) continue;
+        for (let mBucket = 0; mBucket < N_H; mBucket++) {
+          const w = wLL * hueW(hD, mBucket);
+          const idx = k * N_H + mBucket;
+          sumA += w * ((a - S18.meanA[idx]) * s18_sA[idx] + R18.meanA[idx]);
+          sumB += w * ((b - S18.meanB[idx]) * s18_sB[idx] + R18.meanB[idx]);
+          sumW += w;
+        }
+      }
+      if (sumW > 0) { aH = sumA / sumW; bH = sumB / sumW; }
+    }
+
+    // Blend hue-aware + L-tier by chromatic-ness of the pixel
+    const aT = hueBlend * aH + (1 - hueBlend) * aL;
+    const bT = hueBlend * bH + (1 - hueBlend) * bL;
+
+    // Skin protection: reduce chroma shift on skin-colored pixels
+    const skin = skinLikelihood(a, b);
+    const effStr = strength * (1 - skin * 0.65);
+
     outLab[j]   = L + strength * (Lm - L);
-    outLab[j+1] = a + strength * (aT - a);
-    outLab[j+2] = b + strength * (bT - b);
+    outLab[j+1] = a + effStr * (aT - a);
+    outLab[j+2] = b + effStr * (bT - b);
   }
 
   if (protectExposure) postExposureCorrection(outLab, srcLab);
 
-  // Lab → RGB into output ImageData
+  // Lab → sRGB (gamut-safe + dithered)
   const out = new ImageData(sourceImageData.width, sourceImageData.height);
   const od = out.data;
   const sd = sourceImageData.data;
   for (let i = 0, j = 0; i < sd.length; i += 4, j += 3) {
-    const [r, g, bb] = labToRgb(outLab[j], outLab[j+1], outLab[j+2]);
+    const [r, g, bb] = labToRgbSafe(outLab[j], outLab[j+1], outLab[j+2]);
     od[i] = r; od[i+1] = g; od[i+2] = bb; od[i+3] = sd[i+3];
   }
   return out;
