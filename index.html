@@ -106,6 +106,30 @@
     main { padding: 12px 16px 32px; }
   }
 
+
+  /* Before/after slider */
+  .result-canvas-wrap { position: relative; overflow: hidden; touch-action: none; }
+  #compareCanvas { position: absolute; top: 0; left: 0; width: auto; height: auto; max-width: 100%; max-height: 720px; pointer-events: none; clip-path: inset(0 50% 0 0); display: none; }
+  .compare-divider { position: absolute; top: 0; bottom: 0; left: 50%; width: 2px; background: white; box-shadow: 0 0 6px rgba(0,0,0,0.6); cursor: ew-resize; display: none; z-index: 3; transform: translateX(-1px); }
+  .compare-divider::before { content: 'BEFORE'; position: absolute; top: 8px; right: 8px; font-size: 10px; color: white; text-shadow: 0 1px 2px rgba(0,0,0,0.8); letter-spacing: .05em; font-weight: 700; }
+  .compare-divider::after  { content: 'AFTER';  position: absolute; top: 8px; left: 8px;  font-size: 10px; color: white; text-shadow: 0 1px 2px rgba(0,0,0,0.8); letter-spacing: .05em; font-weight: 700; }
+  .compare-handle { position: absolute; top: 50%; left: 50%; width: 32px; height: 32px; border-radius: 16px; background: white; transform: translate(-50%, -50%); box-shadow: 0 2px 8px rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; color: #0c1020; font-size: 16px; font-weight: 700; }
+  .compare-handle::before { content: '\2194'; }
+
+  /* Toast */
+  .toast { position: fixed; top: 18px; left: 50%; transform: translateX(-50%) translateY(-12px); background: var(--panel); color: var(--text); border: 1px solid var(--border); padding: 10px 16px; border-radius: 10px; font-size: 13px; opacity: 0; pointer-events: none; transition: opacity .2s ease, transform .2s ease; z-index: 1000; max-width: 90vw; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast.err { border-color: var(--danger); color: var(--danger); }
+  .toast.ok  { border-color: var(--ok);     color: var(--ok); }
+
+  /* Download options */
+  .download-options { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .format-toggle { display: inline-flex; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .format-btn { background: transparent; color: var(--muted); border: none; padding: 5px 10px; font-size: 12px; font-weight: 600; cursor: pointer; }
+  .format-btn.active { background: var(--accent); color: #0c1020; }
+  .quality-wrap { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); }
+  .quality-wrap input[type=range] { width: 80px; }
+  .quality-wrap.hidden { display: none; }
 </style>
 </head>
 <body>
@@ -146,7 +170,7 @@
       </div>
       <div class="setting">
         <label>Max output size: <span class="val" id="maxSizeVal">1600</span> px</label>
-        <input type="range" id="maxSizeSlider" min="512" max="3000" step="64" value="1600" />
+        <input type="range" id="maxSizeSlider" min="512" max="4096" step="64" value="1600" />
         <div class="sub">Longest edge. Larger = sharper but slower.</div>
       </div>
     </div>
@@ -166,15 +190,23 @@
   <section class="result">
     <div class="result-header">
       <h3>Result</h3>
-      <div class="result-tools">
-        <span class="compare-hint" id="compareHint" style="display:none;">Hold to see original</span>
-        <button class="btn secondary" id="downloadBtn" disabled>Download PNG</button>
+      <div class="download-options">
+        <div class="format-toggle">
+          <button class="format-btn active" data-fmt="jpeg">JPEG</button>
+          <button class="format-btn" data-fmt="png">PNG</button>
+        </div>
+        <div class="quality-wrap" id="qualityWrap">
+          <label>Quality <span id="qualityVal">92</span></label>
+          <input type="range" id="qualitySlider" min="60" max="100" step="1" value="92" />
+        </div>
+        <button class="btn secondary" id="downloadBtn" disabled>Download</button>
       </div>
     </div>
     <div class="result-canvas-wrap" id="resultWrap">
       <div class="result-empty" id="resultEmpty">Your edited photo will appear here.</div>
       <canvas id="resultCanvas" style="display:none;"></canvas>
       <canvas id="compareCanvas"></canvas>
+      <div class="compare-divider" id="compareDivider"><div class="compare-handle"></div></div>
     </div>
   </section>
 </main>
@@ -197,7 +229,10 @@ const state = {
   strength: 1.0,
   maxSize: 1600,
   protectExposure: true,
-  lastOriginalCanvas: null, // for the hold-to-compare view
+  outputFormat: 'jpeg',
+  jpegQuality: 0.92,
+  sourceFileBytes: null,    // raw bytes of source JPEG, for EXIF preservation on download
+  lastOriginalCanvas: null, // for compare-slider overlay
 };
 
 const $ = (id) => document.getElementById(id);
@@ -343,7 +378,7 @@ function wireZone(zoneId, pickBtnId, inputId, canvasId, emptyId, onLoad) {
       // Tiny visual feedback — flash the zone that just received an image
       zone.animate([{ outline: '2px solid var(--accent)', outlineOffset: '0px' }, { outline: '2px solid transparent', outlineOffset: '0px' }], { duration: 450, easing: 'ease-out' });
     };
-    img.onerror = () => setStatus('Could not load that image.', 'err');
+    img.onerror = () => toast('Could not load that image.');
     img.src = url;
   }
   // Register for click-to-assign / programmatic loading
@@ -352,9 +387,13 @@ function wireZone(zoneId, pickBtnId, inputId, canvasId, emptyId, onLoad) {
   async function loadFile(file) {
     try {
       if (!file.type.startsWith('image/') && !isHeicFile(file)) {
-        setStatus('Not an image.', 'err'); return;
+        toast('That file is not an image.'); return;
       }
       if (isHeicFile(file)) file = await decodeHeic(file);
+      // Capture raw file bytes for EXIF preservation (JPEGs only)
+      if (zoneId === 'sourceZone' && file.type === 'image/jpeg') {
+        try { state.sourceFileBytes = new Uint8Array(await file.arrayBuffer()); } catch { state.sourceFileBytes = null; }
+      }
       const orientation = await readExifOrientation(file);
       const url = URL.createObjectURL(file);
       const img = await new Promise((res, rej) => {
@@ -372,8 +411,7 @@ function wireZone(zoneId, pickBtnId, inputId, canvasId, emptyId, onLoad) {
       updateReady();
       setStatus('');
     } catch (e) {
-      console.error(e);
-      setStatus('Could not read that image: ' + (e.message || e), 'err');
+      console.error(e); toast('Could not read that image: ' + (e.message || e));
     }
   }
 }
@@ -405,17 +443,20 @@ function updateReady() {
 $('strengthSlider').addEventListener('input', (e) => {
   state.strength = +e.target.value / 100;
   $('strengthVal').textContent = e.target.value;
+  saveSettings();
 });
 $('maxSizeSlider').addEventListener('input', (e) => {
   state.maxSize = +e.target.value;
   $('maxSizeVal').textContent = e.target.value;
+  saveSettings();
 });
 $('protectExposureToggle').addEventListener('change', (e) => {
   state.protectExposure = e.target.checked;
+  saveSettings();
 });
 
 $('resetBtn').addEventListener('click', () => {
-  state.sourceImg = null; state.refImg = null; state.lastOriginalCanvas = null;
+  state.sourceImg = null; state.refImg = null; state.lastOriginalCanvas = null; state.sourceFileBytes = null;
   ['sourceCanvas', 'refCanvas', 'resultCanvas', 'compareCanvas'].forEach(id => {
     const c = $(id); c.style.display = 'none';
     c.getContext('2d').clearRect(0, 0, c.width, c.height);
@@ -423,7 +464,7 @@ $('resetBtn').addEventListener('click', () => {
   ['sourceEmpty', 'refEmpty', 'resultEmpty'].forEach(id => { $(id).style.display = 'block'; });
   $('sourceInput').value = ''; $('refInput').value = '';
   $('downloadBtn').disabled = true;
-  $('compareHint').style.display = 'none';
+  $('compareDivider').style.display = 'none'; $('compareCanvas').style.display = 'none';
   updateReady();
   setStatus('');
 });
@@ -679,43 +720,75 @@ $('processBtn').addEventListener('click', async () => {
     cc.getContext('2d').drawImage(srcCanvas, 0, 0);
 
     $('downloadBtn').disabled = false;
-    $('compareHint').style.display = 'inline';
-    setStatus(`Done in ${dt} ms. Hold the result to see the original.`, 'ok');
+    $('compareDivider').style.display = 'block'; $('compareCanvas').style.display = 'block'; if (window.__resetCompareSlider) window.__resetCompareSlider();
+    setStatus(`Done in ${dt} ms`, 'ok');
   } catch (err) {
-    console.error(err);
-    setStatus('Error: ' + (err.message || err), 'err');
+    console.error(err); toast('Error: ' + (err.message || err));
   } finally {
     $('processBtn').disabled = false;
   }
 });
 
-/* ---------- Press-and-hold compare ---------- */
-(function setupCompare() {
+/* ---------- Before/after slider ---------- */
+(function setupCompareSlider() {
   const wrap = $('resultWrap');
-  const cc = $('compareCanvas');
-  let active = false;
-  const show = () => { if (state.lastOriginalCanvas) { cc.style.display = 'block'; active = true; } };
-  const hide = () => { cc.style.display = 'none'; active = false; };
-  wrap.addEventListener('mousedown', show);
-  wrap.addEventListener('mouseup', hide);
-  wrap.addEventListener('mouseleave', hide);
-  wrap.addEventListener('touchstart', (e) => { show(); });
-  wrap.addEventListener('touchend', hide);
-  wrap.addEventListener('touchcancel', hide);
+  const divider = $('compareDivider');
+  const compare = $('compareCanvas');
+  const result = $('resultCanvas');
+  let dragging = false;
+
+  function applyPosition(pct) {
+    pct = Math.max(0, Math.min(100, pct));
+    compare.style.clipPath = `inset(0 ${100 - pct}% 0 0)`;
+    divider.style.left = pct + '%';
+  }
+  function posFromEvent(e) {
+    const rect = result.getBoundingClientRect();
+    const cx = e.touches ? e.touches[0].clientX : e.clientX;
+    return ((cx - rect.left) / rect.width) * 100;
+  }
+  function down(e) { dragging = true; applyPosition(posFromEvent(e)); e.preventDefault(); }
+  function move(e) { if (dragging) { applyPosition(posFromEvent(e)); if (e.cancelable) e.preventDefault(); } }
+  function up()    { dragging = false; }
+
+  wrap.addEventListener('mousedown', down);
+  wrap.addEventListener('touchstart', down, { passive: false });
+  window.addEventListener('mousemove', move);
+  window.addEventListener('touchmove', move, { passive: false });
+  window.addEventListener('mouseup', up);
+  window.addEventListener('touchend', up);
+
+  // Expose a reset for new results
+  window.__resetCompareSlider = () => applyPosition(50);
 })();
 
 /* ---------- Download ---------- */
 $('downloadBtn').addEventListener('click', () => {
   const canvas = $('resultCanvas');
-  canvas.toBlob((blob) => {
-    const url = URL.createObjectURL(blob);
+  const fmt = state.outputFormat;
+  const mime = fmt === 'png' ? 'image/png' : 'image/jpeg';
+  const ext = fmt === 'png' ? 'png' : 'jpg';
+  const quality = state.jpegQuality;
+  canvas.toBlob(async (blob) => {
+    let bytes = new Uint8Array(await blob.arrayBuffer());
+    // Inject source EXIF (with orientation forced to 1) when writing JPEG
+    if (fmt !== 'png' && state.sourceFileBytes) {
+      const app1 = extractApp1(state.sourceFileBytes);
+      if (app1) {
+        const exifBytes = state.sourceFileBytes.slice(app1.start, app1.end);
+        normalizeOrientationInApp1(exifBytes, 0);
+        bytes = insertApp1IntoJpeg(bytes, exifBytes);
+      }
+    }
+    const out = new Blob([bytes], { type: mime });
+    const url = URL.createObjectURL(out);
     const a = document.createElement('a');
     a.href = url;
     const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    a.download = `vibe-matched-${ts}.png`;
+    a.download = `vibe-matched-${ts}.${ext}`;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }, 'image/png');
+  }, mime, quality);
 });
 
 
@@ -764,6 +837,140 @@ $('downloadBtn').addEventListener('click', () => {
         e.clientX >= window.innerWidth || e.clientY >= window.innerHeight) stop();
   });
 })();
+
+/* ---------- Toast ---------- */
+function toast(msg, kind = 'err', ms = 3200) {
+  if (!msg) return;
+  const el = document.createElement('div');
+  el.className = 'toast ' + (kind || '');
+  el.textContent = msg;
+  document.body.appendChild(el);
+  requestAnimationFrame(() => el.classList.add('show'));
+  setTimeout(() => {
+    el.classList.remove('show');
+    setTimeout(() => el.remove(), 260);
+  }, ms);
+}
+
+/* ---------- EXIF segment helpers for download ---------- */
+// Locate the first APP1 (EXIF) segment in a JPEG byte array. Returns {start,end} or null.
+function extractApp1(bytes) {
+  if (!bytes || bytes.length < 4 || bytes[0] !== 0xFF || bytes[1] !== 0xD8) return null;
+  let off = 2;
+  while (off + 4 < bytes.length) {
+    if (bytes[off] !== 0xFF) return null;
+    const marker = bytes[off + 1];
+    // APP1 (possibly EXIF)
+    if (marker === 0xE1) {
+      const size = (bytes[off + 2] << 8) | bytes[off + 3];
+      // Verify "Exif\0\0"
+      if (bytes[off+4]===0x45 && bytes[off+5]===0x78 && bytes[off+6]===0x69 && bytes[off+7]===0x66) {
+        return { start: off, end: off + 2 + size };
+      }
+    }
+    if (marker === 0xDA) return null; // SOS reached, no EXIF
+    const size = (bytes[off + 2] << 8) | bytes[off + 3];
+    off += 2 + size;
+  }
+  return null;
+}
+// Inside an APP1 segment, set the IFD0 Orientation tag (0x0112) to 1.
+function normalizeOrientationInApp1(bytes, app1Start) {
+  const p = app1Start + 4;
+  if (bytes[p]!==0x45 || bytes[p+1]!==0x78 || bytes[p+2]!==0x69 || bytes[p+3]!==0x66) return;
+  const tiff = p + 6;
+  const little = bytes[tiff] === 0x49;
+  const u16 = (o) => little ? (bytes[o] | (bytes[o+1]<<8)) : ((bytes[o]<<8) | bytes[o+1]);
+  const u32 = (o) => little ? (bytes[o] | (bytes[o+1]<<8) | (bytes[o+2]<<16) | (bytes[o+3]<<24))
+                            : ((bytes[o]<<24) | (bytes[o+1]<<16) | (bytes[o+2]<<8) | bytes[o+3]);
+  const setU16 = (o, v) => {
+    if (little) { bytes[o]=v&0xFF; bytes[o+1]=(v>>8)&0xFF; }
+    else        { bytes[o]=(v>>8)&0xFF; bytes[o+1]=v&0xFF; }
+  };
+  if (u16(tiff+2) !== 0x002A) return;
+  const ifdOff = u32(tiff+4);
+  const entriesOff = tiff + ifdOff;
+  if (entriesOff + 2 > bytes.length) return;
+  const entries = u16(entriesOff);
+  for (let i = 0; i < entries; i++) {
+    const eo = entriesOff + 2 + i * 12;
+    if (eo + 12 > bytes.length) return;
+    if (u16(eo) === 0x0112) { setU16(eo + 8, 1); return; }
+  }
+}
+// Insert an APP1 segment immediately after SOI in a JPEG byte array.
+function insertApp1IntoJpeg(jpegBytes, app1Bytes) {
+  if (jpegBytes[0] !== 0xFF || jpegBytes[1] !== 0xD8) return jpegBytes;
+  const out = new Uint8Array(jpegBytes.length + app1Bytes.length);
+  out[0] = 0xFF; out[1] = 0xD8;
+  out.set(app1Bytes, 2);
+  out.set(jpegBytes.subarray(2), 2 + app1Bytes.length);
+  return out;
+}
+
+/* ---------- Format toggle + quality slider ---------- */
+document.querySelectorAll('.format-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.format-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    state.outputFormat = btn.dataset.fmt;
+    $('qualityWrap').classList.toggle('hidden', state.outputFormat === 'png');
+    saveSettings();
+  });
+});
+$('qualitySlider').addEventListener('input', (e) => {
+  state.jpegQuality = (+e.target.value) / 100;
+  $('qualityVal').textContent = e.target.value;
+  saveSettings();
+});
+
+/* ---------- Settings persistence ---------- */
+const LS_KEY = 'vibematcher:settings:v1';
+function saveSettings() {
+  try {
+    localStorage.setItem(LS_KEY, JSON.stringify({
+      strength: state.strength,
+      maxSize: state.maxSize,
+      protectExposure: state.protectExposure,
+      outputFormat: state.outputFormat,
+      jpegQuality: state.jpegQuality,
+    }));
+  } catch {}
+}
+function loadSettings() {
+  try {
+    const raw = localStorage.getItem(LS_KEY); if (!raw) return;
+    const s = JSON.parse(raw);
+    if (typeof s.strength === 'number') {
+      state.strength = s.strength;
+      $('strengthSlider').value = Math.round(s.strength * 100);
+      $('strengthVal').textContent = Math.round(s.strength * 100);
+    }
+    if (typeof s.maxSize === 'number') {
+      state.maxSize = s.maxSize;
+      $('maxSizeSlider').value = s.maxSize;
+      $('maxSizeVal').textContent = s.maxSize;
+    }
+    if (typeof s.protectExposure === 'boolean') {
+      state.protectExposure = s.protectExposure;
+      $('protectExposureToggle').checked = s.protectExposure;
+    }
+    if (s.outputFormat === 'png' || s.outputFormat === 'jpeg') {
+      state.outputFormat = s.outputFormat;
+      document.querySelectorAll('.format-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.fmt === s.outputFormat);
+      });
+      $('qualityWrap').classList.toggle('hidden', s.outputFormat === 'png');
+    }
+    if (typeof s.jpegQuality === 'number') {
+      state.jpegQuality = s.jpegQuality;
+      const pct = Math.round(s.jpegQuality * 100);
+      $('qualitySlider').value = pct;
+      $('qualityVal').textContent = pct;
+    }
+  } catch {}
+}
+loadSettings();
 </script>
 </body>
 </html>
