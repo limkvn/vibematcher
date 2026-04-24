@@ -805,6 +805,31 @@ $('processBtn').addEventListener('click', async () => {
 })();
 
 /* ---------- Download ---------- */
+/* Save or share the output blob. On iOS / Android the Web Share API pops the
+ * native share sheet (which includes "Save Image" → Photos on iOS). Falls back
+ * to a classic download-anchor on desktop browsers that don't support sharing
+ * files. User-cancellation of the share sheet is silent. */
+async function saveOrShareBlob(blob, filename) {
+  // Prefer Web Share API when it can actually share this file type.
+  try {
+    const file = new File([blob], filename, { type: blob.type });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: 'Photo Vibe Matcher' });
+      return;
+    }
+  } catch (e) {
+    if (e && e.name === 'AbortError') return; // user tapped "Cancel" — fine
+    console.warn('share failed, falling back to download:', e);
+  }
+  // Fallback: download-anchor (desktop, older mobile)
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 $('downloadBtn').addEventListener('click', () => {
   const canvas = $('resultCanvas');
   const fmt = state.outputFormat;
@@ -823,13 +848,8 @@ $('downloadBtn').addEventListener('click', () => {
       }
     }
     const out = new Blob([bytes], { type: mime });
-    const url = URL.createObjectURL(out);
-    const a = document.createElement('a');
-    a.href = url;
     const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    a.download = `vibe-matched-${ts}.${ext}`;
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    await saveOrShareBlob(out, `vibe-matched-${ts}.${ext}`);
   }, mime, quality);
 });
 
