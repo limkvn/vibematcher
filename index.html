@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Photo Vibe Matcher — match any photo's look</title>
+  <meta name="description" content="Match your photo's color grading to a reference photo. Runs entirely in your browser — nothing uploaded." />
+  <meta property="og:title" content="Photo Vibe Matcher" />
+  <meta property="og:description" content="Upload a photo, upload a reference, click Match. Private — runs locally in your browser." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://limkvn.github.io/vibematcher/" />
+  <link rel="canonical" href="https://limkvn.github.io/vibematcher/" />
+  <meta name="twitter:card" content="summary" />
+  <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22><rect width=%2264%22 height=%2264%22 rx=%2214%22 fill=%22%237aa2ff%22/><circle cx=%2232%22 cy=%2232%22 r=%2216%22 fill=%22none%22 stroke=%22%230c1020%22 stroke-width=%224%22/><circle cx=%2232%22 cy=%2232%22 r=%228%22 fill=%22%230c1020%22/></svg>" />
+
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --panel-2: #1f232c;
+    --border: #2a2f3a;
+    --text: #e6e8ec;
+    --muted: #9aa3b2;
+    --accent: #7aa2ff;
+    --accent-2: #5d7dfc;
+    --danger: #ff6b6b;
+    --ok: #6fe0a4;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 14px; line-height: 1.4; }
+  header { padding: 24px 28px 8px; }
+  header h1 { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -0.01em; }
+  header p { margin: 4px 0 0; color: var(--muted); font-size: 13px; max-width: 720px; }
+  main { padding: 20px 28px 48px; max-width: 1200px; margin: 0 auto; }
+
+  .uploads { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 18px; }
+  .zone {
+    background: var(--panel); border: 1px dashed var(--border);
+    border-radius: 12px; padding: 14px; position: relative;
+    transition: border-color .15s ease, background .15s ease;
+    min-height: 260px; display: flex; flex-direction: column;
+  }
+  .zone.dragover { border-color: var(--accent); background: #1a2030; }
+  .zone-label { display: flex; align-items: center; gap: 8px; font-weight: 600; margin-bottom: 10px; }
+  .zone-label .num { background: var(--accent); color: #0c1020; font-size: 12px;
+    font-weight: 700; border-radius: 999px; padding: 2px 8px; }
+  .zone .hint { color: var(--muted); font-size: 12px; font-weight: 400; }
+  .zone .preview-wrap { flex: 1; display: flex; align-items: center; justify-content: center;
+    background: #0b0d12; border-radius: 8px; overflow: hidden; margin-top: 10px; min-height: 160px; }
+  .zone canvas { max-width: 100%; max-height: 340px; display: block; }
+  .zone .empty-hint { color: var(--muted); font-size: 13px; text-align: center; padding: 30px; }
+  .zone input[type=file] { display: none; }
+  .zone .pick-btn {
+    align-self: flex-start; font-size: 12px; color: var(--accent);
+    background: transparent; border: 1px solid var(--border); border-radius: 6px;
+    padding: 4px 8px; cursor: pointer; margin-top: 8px;
+  }
+  .zone .pick-btn:hover { border-color: var(--accent); }
+
+  .controls { background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px; margin-bottom: 18px; }
+  .settings { display: grid; gap: 16px; grid-template-columns: 1fr 1fr; }
+  .setting label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .setting input[type=range] { width: 100%; }
+  .setting .val { color: var(--text); font-weight: 600; }
+  .setting .sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+  .toggle-row { margin-top: 14px; display: flex; gap: 8px; align-items: center; }
+  .toggle-row label { display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; font-size: 13px; }
+  .toggle-row input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
+  .toggle-row .sub { font-size: 11px; color: var(--muted); }
+
+  .go-row { display: flex; gap: 10px; align-items: center; margin-top: 18px; flex-wrap: wrap; }
+  .btn {
+    background: var(--accent); color: #0c1020; border: none;
+    padding: 10px 18px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .btn.secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
+  #status { color: var(--muted); font-size: 12px; min-height: 1.2em; }
+  #status.err { color: var(--danger); }
+  #status.ok { color: var(--ok); }
+
+  .result { background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px; }
+  .result-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; gap: 10px; flex-wrap: wrap; }
+  .result-header h3 { margin: 0; font-size: 14px; font-weight: 600; }
+  .result-tools { display: flex; gap: 8px; align-items: center; }
+  .result-canvas-wrap {
+    position: relative;
+    background: #0b0d12; border-radius: 8px; min-height: 200px;
+    display: flex; align-items: center; justify-content: center; overflow: hidden;
+  }
+  #resultCanvas { max-width: 100%; max-height: 720px; display: block; }
+  #compareCanvas { position: absolute; inset: 0; margin: auto; pointer-events: none; display: none;
+    max-width: 100%; max-height: 720px; }
+  .result-empty { color: var(--muted); padding: 40px; text-align: center; }
+  .compare-hint { font-size: 11px; color: var(--muted); }
+
+  @media (max-width: 720px) {
+    .uploads { grid-template-columns: 1fr; }
+    .settings { grid-template-columns: 1fr; }
+    header { padding: 16px 16px 4px; }
+    main { padding: 12px 16px 32px; }
+  }
+
+</style>
+</head>
+<body>
+<header>
+  <h1>Photo Vibe Matcher</h1>
+  <p>Upload your photo, upload a reference whose look you love, click <b>Match vibe</b>. Matches exposure curve, contrast, and the reference's split-toning (e.g. teal shadows, orange highlights). <b>Runs entirely in your browser — your photos never leave your device.</b></p>
+</header>
+
+<main>
+  <section class="uploads">
+    <div class="zone" id="sourceZone">
+      <div class="zone-label"><span class="num">1</span> Your photo <span class="hint">(to edit)</span></div>
+      <div class="preview-wrap">
+        <div class="empty-hint" id="sourceEmpty">Drop an image here, paste from clipboard,<br/>or click "Choose image"</div>
+        <canvas id="sourceCanvas" style="display:none;"></canvas>
+      </div>
+      <button class="pick-btn" id="sourcePick">Choose image</button>
+      <input type="file" id="sourceInput" accept="image/*,.heic,.heif" />
+    </div>
+
+    <div class="zone" id="refZone">
+      <div class="zone-label"><span class="num">2</span> Reference <span class="hint">(the vibe to match)</span></div>
+      <div class="preview-wrap">
+        <div class="empty-hint" id="refEmpty">Drop a reference image here</div>
+        <canvas id="refCanvas" style="display:none;"></canvas>
+      </div>
+      <button class="pick-btn" id="refPick">Choose image</button>
+      <input type="file" id="refInput" accept="image/*,.heic,.heif" />
+    </div>
+  </section>
+
+  <section class="controls">
+    <div class="settings">
+      <div class="setting">
+        <label>Strength: <span class="val" id="strengthVal">100</span>%</label>
+        <input type="range" id="strengthSlider" min="0" max="100" value="100" />
+        <div class="sub">0% = original, 100% = full vibe match. Try 70–85% for natural results.</div>
+      </div>
+      <div class="setting">
+        <label>Max output size: <span class="val" id="maxSizeVal">1600</span> px</label>
+        <input type="range" id="maxSizeSlider" min="512" max="3000" step="64" value="1600" />
+        <div class="sub">Longest edge. Larger = sharper but slower.</div>
+      </div>
+    </div>
+
+    <div class="toggle-row">
+      <label><input type="checkbox" id="protectExposureToggle" checked /> Protect exposure</label>
+      <span class="sub">Prevents blown-out highlights and keeps your photo's overall brightness when the reference is much brighter or darker.</span>
+    </div>
+
+    <div class="go-row">
+      <button class="btn" id="processBtn" disabled>Match vibe</button>
+      <button class="btn secondary" id="resetBtn">Reset</button>
+      <div id="status"></div>
+    </div>
+  </section>
+
+  <section class="result">
+    <div class="result-header">
+      <h3>Result</h3>
+      <div class="result-tools">
+        <span class="compare-hint" id="compareHint" style="display:none;">Hold to see original</span>
+        <button class="btn secondary" id="downloadBtn" disabled>Download PNG</button>
+      </div>
+    </div>
+    <div class="result-canvas-wrap" id="resultWrap">
+      <div class="result-empty" id="resultEmpty">Your edited photo will appear here.</div>
+      <canvas id="resultCanvas" style="display:none;"></canvas>
+      <canvas id="compareCanvas"></canvas>
+    </div>
+  </section>
+</main>
+
+<script>
+/* =========================================================================
+   Photo Vibe Matcher
+   - Luminance histogram matching (source L CDF -> reference L CDF)
+   - 3-tier Gaussian-weighted chroma transfer in Lab space:
+     shadows (L~20), midtones (L~55), highlights (L~85).
+     Captures split-toning without hard boundaries.
+   - Blended with original by strength slider.
+   All color math in CIE Lab (D65).
+   ========================================================================= */
+
+/* ---------- State ---------- */
+const state = {
+  sourceImg: null,
+  refImg: null,
+  strength: 1.0,
+  maxSize: 1600,
+  protectExposure: true,
+  lastOriginalCanvas: null, // for the hold-to-compare view
+};
+
+const $ = (id) => document.getElementById(id);
+const statusEl = $('status');
+const setStatus = (msg, kind = '') => {
+  statusEl.textContent = msg || '';
+  statusEl.className = kind;
+};
+
+
+/* ---------- EXIF orientation + HEIC lazy-loader ----------
+ * Phones save portrait photos rotated with an EXIF orientation tag. Canvas
+ * ignores that tag, so we read it manually and rotate when drawing. HEIC is
+ * iPhone's default format; Chrome/Firefox can't decode it natively, so we
+ * lazy-load heic2any from a CDN only when a HEIC file is actually dropped. */
+
+// Read EXIF orientation (1..8) from a JPEG file, or 1 if unavailable.
+async function readExifOrientation(file) {
+  if (file.type !== 'image/jpeg') return 1;
+  try {
+    const buf = await file.slice(0, 131072).arrayBuffer();
+    const v = new DataView(buf);
+    if (v.getUint16(0) !== 0xFFD8) return 1; // not a JPEG
+    let off = 2;
+    while (off + 4 < v.byteLength) {
+      const marker = v.getUint16(off); off += 2;
+      if (marker === 0xFFE1) { // APP1 (EXIF)
+        off += 2; // skip segment length
+        if (v.getUint32(off) !== 0x45786966) return 1; // "Exif"
+        off += 6; // "Exif\0\0"
+        const tiffStart = off;
+        const little = v.getUint16(off) === 0x4949;
+        off += 2;
+        if (v.getUint16(off, little) !== 0x002A) return 1;
+        off += 2;
+        const ifdOff = v.getUint32(off, little);
+        off = tiffStart + ifdOff;
+        const entries = v.getUint16(off, little); off += 2;
+        for (let i = 0; i < entries && off + 12 <= v.byteLength; i++) {
+          const tag = v.getUint16(off, little);
+          if (tag === 0x0112) return v.getUint16(off + 8, little) || 1;
+          off += 12;
+        }
+        return 1;
+      } else if ((marker & 0xFF00) !== 0xFF00) {
+        return 1;
+      } else {
+        const size = v.getUint16(off);
+        off += size;
+      }
+    }
+  } catch { return 1; }
+  return 1;
+}
+
+// Draw the image to the target canvas, correcting for EXIF orientation.
+function drawOriented(canvas, img, orientation) {
+  const w = img.naturalWidth || img.width;
+  const h = img.naturalHeight || img.height;
+  const rotated = orientation >= 5 && orientation <= 8;
+  canvas.width  = rotated ? h : w;
+  canvas.height = rotated ? w : h;
+  const ctx = canvas.getContext('2d');
+  ctx.save();
+  switch (orientation) {
+    case 2: ctx.transform(-1,  0,  0,  1,  w,  0); break;
+    case 3: ctx.transform(-1,  0,  0, -1,  w,  h); break;
+    case 4: ctx.transform( 1,  0,  0, -1,  0,  h); break;
+    case 5: ctx.transform( 0,  1,  1,  0,  0,  0); break;
+    case 6: ctx.transform( 0,  1, -1,  0,  h,  0); break;
+    case 7: ctx.transform( 0, -1, -1,  0,  h,  w); break;
+    case 8: ctx.transform( 0, -1,  1,  0,  0,  w); break;
+    default: /* 1, no-op */
+  }
+  ctx.drawImage(img, 0, 0);
+  ctx.restore();
+}
+
+// Lazy-load heic2any from CDN. Only fetched the first time a HEIC file is seen.
+let _heicPromise = null;
+function loadHeicLib() {
+  if (_heicPromise) return _heicPromise;
+  _heicPromise = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js';
+    s.onload = () => resolve(window.heic2any);
+    s.onerror = () => reject(new Error('Could not load HEIC support. Check your connection.'));
+    document.head.appendChild(s);
+  });
+  return _heicPromise;
+}
+
+function isHeicFile(file) {
+  return file && (file.type === 'image/heic' || file.type === 'image/heif' ||
+                  /\.hei[cf]$/i.test(file.name || ''));
+}
+
+async function decodeHeic(file) {
+  setStatus('Converting HEIC (first one takes a moment)...');
+  const heic2any = await loadHeicLib();
+  const blob = await heic2any({ blob: file, toType: 'image/jpeg', quality: 0.92 });
+  const outBlob = Array.isArray(blob) ? blob[0] : blob;
+  return new File([outBlob], (file.name || 'heic-photo').replace(/\.hei[cf]$/i, '.jpg'), { type: 'image/jpeg' });
+}
+
+/* ---------- Upload zones ---------- */
+// Per-zone URL loaders, registered by wireZone below and used by click-to-assign.
+const zoneLoaders = {};
+
+function wireZone(zoneId, pickBtnId, inputId, canvasId, emptyId, onLoad) {
+  const zone = $(zoneId);
+  const pick = $(pickBtnId);
+  const input = $(inputId);
+  const canvas = $(canvasId);
+  const empty = $(emptyId);
+
+  pick.addEventListener('click', () => input.click());
+  input.addEventListener('change', (e) => {
+    if (e.target.files && e.target.files[0]) loadFile(e.target.files[0]);
+  });
+
+  ['dragenter', 'dragover'].forEach(ev =>
+    zone.addEventListener(ev, (e) => { e.preventDefault(); zone.classList.add('dragover'); }));
+  ['dragleave', 'drop'].forEach(ev =>
+    zone.addEventListener(ev, (e) => { e.preventDefault(); zone.classList.remove('dragover'); }));
+  zone.addEventListener('drop', (e) => {
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) { loadFile(e.dataTransfer.files[0]); return; }
+    const url = e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain');
+    if (url) loadUrl(url);
+  });
+
+  function loadUrl(url) {
+    const img = new Image();
+    img.onload = () => {
+      const ctx = canvas.getContext('2d');
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      ctx.drawImage(img, 0, 0);
+      canvas.style.display = 'block';
+      empty.style.display = 'none';
+      onLoad(img);
+      updateReady();
+      // Tiny visual feedback — flash the zone that just received an image
+      zone.animate([{ outline: '2px solid var(--accent)', outlineOffset: '0px' }, { outline: '2px solid transparent', outlineOffset: '0px' }], { duration: 450, easing: 'ease-out' });
+    };
+    img.onerror = () => setStatus('Could not load that image.', 'err');
+    img.src = url;
+  }
+  // Register for click-to-assign / programmatic loading
+  zoneLoaders[zoneId.replace('Zone', '')] = loadUrl;
+
+  async function loadFile(file) {
+    try {
+      if (!file.type.startsWith('image/') && !isHeicFile(file)) {
+        setStatus('Not an image.', 'err'); return;
+      }
+      if (isHeicFile(file)) file = await decodeHeic(file);
+      const orientation = await readExifOrientation(file);
+      const url = URL.createObjectURL(file);
+      const img = await new Promise((res, rej) => {
+        const i = new Image();
+        i.onload  = () => res(i);
+        i.onerror = () => rej(new Error('decode failed'));
+        i.src = url;
+      });
+      drawOriented(canvas, img, orientation);
+      URL.revokeObjectURL(url);
+      canvas.style.display = 'block';
+      empty.style.display = 'none';
+      // Pass the already-oriented canvas to downstream code (resizeToMax handles canvases)
+      onLoad(canvas);
+      updateReady();
+      setStatus('');
+    } catch (e) {
+      console.error(e);
+      setStatus('Could not read that image: ' + (e.message || e), 'err');
+    }
+  }
+}
+
+wireZone('sourceZone', 'sourcePick', 'sourceInput', 'sourceCanvas', 'sourceEmpty',
+  (img) => { state.sourceImg = img; });
+wireZone('refZone', 'refPick', 'refInput', 'refCanvas', 'refEmpty',
+  (img) => { state.refImg = img; });
+
+document.addEventListener('paste', (e) => {
+  const items = e.clipboardData?.items || [];
+  for (const it of items) {
+    if (it.type.startsWith('image/')) {
+      const file = it.getAsFile();
+      const targetId = !state.sourceImg ? 'sourceInput' : 'refInput';
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      $(targetId).files = dt.files;
+      $(targetId).dispatchEvent(new Event('change', { bubbles: true }));
+      break;
+    }
+  }
+});
+
+function updateReady() {
+  $('processBtn').disabled = !(state.sourceImg && state.refImg);
+}
+
+$('strengthSlider').addEventListener('input', (e) => {
+  state.strength = +e.target.value / 100;
+  $('strengthVal').textContent = e.target.value;
+});
+$('maxSizeSlider').addEventListener('input', (e) => {
+  state.maxSize = +e.target.value;
+  $('maxSizeVal').textContent = e.target.value;
+});
+$('protectExposureToggle').addEventListener('change', (e) => {
+  state.protectExposure = e.target.checked;
+});
+
+$('resetBtn').addEventListener('click', () => {
+  state.sourceImg = null; state.refImg = null; state.lastOriginalCanvas = null;
+  ['sourceCanvas', 'refCanvas', 'resultCanvas', 'compareCanvas'].forEach(id => {
+    const c = $(id); c.style.display = 'none';
+    c.getContext('2d').clearRect(0, 0, c.width, c.height);
+  });
+  ['sourceEmpty', 'refEmpty', 'resultEmpty'].forEach(id => { $(id).style.display = 'block'; });
+  $('sourceInput').value = ''; $('refInput').value = '';
+  $('downloadBtn').disabled = true;
+  $('compareHint').style.display = 'none';
+  updateReady();
+  setStatus('');
+});
+
+/* ---------- Helpers ---------- */
+function resizeToMax(srcCanvasOrImg, maxDim) {
+  const w0 = srcCanvasOrImg.width || srcCanvasOrImg.naturalWidth;
+  const h0 = srcCanvasOrImg.height || srcCanvasOrImg.naturalHeight;
+  const scale = Math.min(1, maxDim / Math.max(w0, h0));
+  const w = Math.round(w0 * scale);
+  const h = Math.round(h0 * scale);
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  c.getContext('2d').drawImage(srcCanvasOrImg, 0, 0, w, h);
+  return c;
+}
+
+/* ---------- sRGB <-> Lab (D65) ---------- */
+function srgbToLin(c) { c /= 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }
+function linToSrgb(c) { c = c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1/2.4) - 0.055; return Math.max(0, Math.min(255, Math.round(c * 255))); }
+const Xn = 0.95047, Yn = 1.0, Zn = 1.08883;
+function f_lab(t) { return t > 0.008856 ? Math.cbrt(t) : (7.787 * t + 16/116); }
+function f_inv(t) { const t3 = t*t*t; return t3 > 0.008856 ? t3 : (t - 16/116) / 7.787; }
+
+function rgbToLab(r, g, b) {
+  const R = srgbToLin(r), G = srgbToLin(g), B = srgbToLin(b);
+  const X = R * 0.4124564 + G * 0.3575761 + B * 0.1804375;
+  const Y = R * 0.2126729 + G * 0.7151522 + B * 0.0721750;
+  const Z = R * 0.0193339 + G * 0.1191920 + B * 0.9503041;
+  const fx = f_lab(X / Xn), fy = f_lab(Y / Yn), fz = f_lab(Z / Zn);
+  return [116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz)];
+}
+function labToRgb(L, a, b) {
+  const fy = (L + 16) / 116;
+  const fx = a / 500 + fy;
+  const fz = fy - b / 200;
+  const X = Xn * f_inv(fx);
+  const Y = Yn * f_inv(fy);
+  const Z = Zn * f_inv(fz);
+  const R =  X * 3.2404542 + Y * -1.5371385 + Z * -0.4985314;
+  const G =  X * -0.9692660 + Y * 1.8760108 + Z * 0.0415560;
+  const B =  X * 0.0556434 + Y * -0.2040259 + Z * 1.0572252;
+  return [linToSrgb(R), linToSrgb(G), linToSrgb(B)];
+}
+
+// Convert ImageData (RGBA bytes) to Float32Array of [L, a, b, L, a, b, ...]
+function rgbaToLabFloat(data) {
+  const n = data.length / 4;
+  const out = new Float32Array(n * 3);
+  for (let i = 0, j = 0; i < data.length; i += 4, j += 3) {
+    const [L, a, b] = rgbToLab(data[i], data[i+1], data[i+2]);
+    out[j] = L; out[j+1] = a; out[j+2] = b;
+  }
+  return out;
+}
+
+/* ---------- Luminance histogram matching ---------- */
+const BINS = 256;
+const L_TO_BIN = (L) => {
+  if (L <= 0) return 0;
+  if (L >= 100) return BINS - 1;
+  return Math.min(BINS - 1, Math.max(0, Math.round(L * (BINS - 1) / 100)));
+};
+
+function buildLuminanceLUT(srcLab, refLab) {
+  const histS = new Uint32Array(BINS);
+  const histR = new Uint32Array(BINS);
+  for (let j = 0; j < srcLab.length; j += 3) histS[L_TO_BIN(srcLab[j])]++;
+  for (let j = 0; j < refLab.length; j += 3) histR[L_TO_BIN(refLab[j])]++;
+
+  // Normalized CDFs
+  const cdfS = new Float32Array(BINS);
+  const cdfR = new Float32Array(BINS);
+  let ss = 0, rs = 0;
+  for (let i = 0; i < BINS; i++) { ss += histS[i]; cdfS[i] = ss; }
+  for (let i = 0; i < BINS; i++) { rs += histR[i]; cdfR[i] = rs; }
+  for (let i = 0; i < BINS; i++) { cdfS[i] /= (ss || 1); cdfR[i] /= (rs || 1); }
+
+  // For each source bin i, find smallest j such that cdfR[j] >= cdfS[i]
+  const lut = new Float32Array(BINS);
+  let j = 0;
+  for (let i = 0; i < BINS; i++) {
+    while (j < BINS - 1 && cdfR[j] < cdfS[i]) j++;
+    lut[i] = j * 100 / (BINS - 1);
+  }
+  return lut;
+}
+
+/* ---------- Gaussian-weighted chroma stats per tier ---------- */
+const TIER_CENTERS = [20, 55, 85];
+const TIER_SIGMA = 22;
+
+function gaussW(L, k) {
+  const x = (L - TIER_CENTERS[k]) / TIER_SIGMA;
+  return Math.exp(-0.5 * x * x);
+}
+
+function chromaStats(labArr) {
+  // Returns [{meanA, meanB, stdA, stdB}, x3]
+  const sW = [0, 0, 0], sA = [0, 0, 0], sB = [0, 0, 0];
+  for (let j = 0; j < labArr.length; j += 3) {
+    const L = labArr[j], a = labArr[j+1], b = labArr[j+2];
+    for (let k = 0; k < 3; k++) {
+      const w = gaussW(L, k);
+      sW[k] += w; sA[k] += w * a; sB[k] += w * b;
+    }
+  }
+  const mA = [sA[0]/sW[0], sA[1]/sW[1], sA[2]/sW[2]];
+  const mB = [sB[0]/sW[0], sB[1]/sW[1], sB[2]/sW[2]];
+  const vA = [0, 0, 0], vB = [0, 0, 0];
+  for (let j = 0; j < labArr.length; j += 3) {
+    const L = labArr[j], a = labArr[j+1], b = labArr[j+2];
+    for (let k = 0; k < 3; k++) {
+      const w = gaussW(L, k);
+      const da = a - mA[k], db = b - mB[k];
+      vA[k] += w * da * da; vB[k] += w * db * db;
+    }
+  }
+  return [0,1,2].map(k => ({
+    meanA: mA[k], meanB: mB[k],
+    stdA: Math.sqrt(vA[k]/sW[k]), stdB: Math.sqrt(vB[k]/sW[k]),
+  }));
+}
+
+/* ---------- Post-exposure correction ----------
+ * Runs AFTER the color transform. Two jobs:
+ *   (1) If the histogram match pushed the overall brightness far from the
+ *       source (e.g. dark photo → bright reference), shift L values so the
+ *       result's mean brightness matches the source's. This preserves your
+ *       photo's exposure while keeping the reference's color grade.
+ *   (2) Apply a soft "highlight knee" — pixels above L=78 get smoothly
+ *       compressed toward a ceiling of ~97, preventing blown-out whites
+ *       and clipping artifacts when the color transfer boosts chroma.
+ *   (3) Symmetric soft shadow lift protects from crushed blacks.
+ * Modifies outLab in place. */
+function postExposureCorrection(outLab, srcLab) {
+  const N = outLab.length / 3;
+
+  // --- Mean-L match --------------------------------------------------------
+  let sSum = 0, oSum = 0;
+  for (let j = 0; j < outLab.length; j += 3) { sSum += srcLab[j]; oSum += outLab[j]; }
+  const meanS = sSum / N, meanO = oSum / N;
+  const shift = meanS - meanO; // positive = brighten, negative = darken
+  for (let j = 0; j < outLab.length; j += 3) outLab[j] += shift;
+
+  // --- Soft highlight knee ------------------------------------------------
+  // L in (KNEE, 100] gets compressed smoothly so it asymptotes to CEIL.
+  const KNEE_HI = 78, CEIL = 97, HI_RANGE = 100 - KNEE_HI;
+  // --- Soft shadow lift ---------------------------------------------------
+  const KNEE_LO = 4, FLOOR = 2, LO_RANGE = KNEE_LO;
+  for (let j = 0; j < outLab.length; j += 3) {
+    let L = outLab[j];
+    if (L > KNEE_HI) {
+      const excess = L - KNEE_HI;
+      // Smooth exponential rolloff, asymptote at CEIL
+      L = KNEE_HI + (CEIL - KNEE_HI) * (1 - Math.exp(-excess / HI_RANGE));
+    } else if (L < KNEE_LO) {
+      const deficit = KNEE_LO - L;
+      L = KNEE_LO - (KNEE_LO - FLOOR) * (1 - Math.exp(-deficit / LO_RANGE));
+    }
+    // Hard clamp as safety
+    if (L < 0) L = 0; else if (L > 100) L = 100;
+    outLab[j] = L;
+  }
+}
+
+/* ---------- Main vibe-match transform ---------- */
+// Maximum ratio for chroma std transfer. Prevents runaway saturation
+// when the reference is much more saturated than the source in some tier.
+const CHROMA_CAP = 2.5;
+
+function vibeMatch(sourceImageData, refImageData, strength, protectExposure) {
+  const srcLab = rgbaToLabFloat(sourceImageData.data);
+  const refLab = rgbaToLabFloat(refImageData.data);
+
+  const lutL = buildLuminanceLUT(srcLab, refLab);
+  const S = chromaStats(srcLab);
+  const R = chromaStats(refLab);
+  const safe = (x) => x < 1e-3 ? 1e-3 : x;
+  const capped = (num, den) => Math.min(CHROMA_CAP, num / safe(den));
+
+  // Precompute per-tier chroma scale factors (capped)
+  const sA = [capped(R[0].stdA, S[0].stdA), capped(R[1].stdA, S[1].stdA), capped(R[2].stdA, S[2].stdA)];
+  const sB = [capped(R[0].stdB, S[0].stdB), capped(R[1].stdB, S[1].stdB), capped(R[2].stdB, S[2].stdB)];
+
+  // Transform into a Lab float buffer first, so we can post-process L freely
+  const outLab = new Float32Array(srcLab.length);
+
+  for (let j = 0; j < srcLab.length; j += 3) {
+    const L = srcLab[j], a = srcLab[j+1], b = srcLab[j+2];
+    const Lm = lutL[L_TO_BIN(L)];
+
+    const w0 = gaussW(L, 0), w1 = gaussW(L, 1), w2 = gaussW(L, 2);
+    const wS = w0 + w1 + w2;
+    const aT =
+      (w0 * ((a - S[0].meanA) * sA[0] + R[0].meanA) +
+       w1 * ((a - S[1].meanA) * sA[1] + R[1].meanA) +
+       w2 * ((a - S[2].meanA) * sA[2] + R[2].meanA)) / wS;
+    const bT =
+      (w0 * ((b - S[0].meanB) * sB[0] + R[0].meanB) +
+       w1 * ((b - S[1].meanB) * sB[1] + R[1].meanB) +
+       w2 * ((b - S[2].meanB) * sB[2] + R[2].meanB)) / wS;
+
+    // Blend with original by strength
+    outLab[j]   = L + strength * (Lm - L);
+    outLab[j+1] = a + strength * (aT - a);
+    outLab[j+2] = b + strength * (bT - b);
+  }
+
+  if (protectExposure) postExposureCorrection(outLab, srcLab);
+
+  // Lab → RGB into output ImageData
+  const out = new ImageData(sourceImageData.width, sourceImageData.height);
+  const od = out.data;
+  const sd = sourceImageData.data;
+  for (let i = 0, j = 0; i < sd.length; i += 4, j += 3) {
+    const [r, g, bb] = labToRgb(outLab[j], outLab[j+1], outLab[j+2]);
+    od[i] = r; od[i+1] = g; od[i+2] = bb; od[i+3] = sd[i+3];
+  }
+  return out;
+}
+
+/* ---------- Process button ---------- */
+$('processBtn').addEventListener('click', async () => {
+  if (!state.sourceImg || !state.refImg) return;
+  $('processBtn').disabled = true;
+  $('downloadBtn').disabled = true;
+  try {
+    setStatus('Matching vibe...');
+    // Give UI a moment to update
+    await new Promise(r => setTimeout(r, 20));
+
+    const srcCanvas = resizeToMax(state.sourceImg, state.maxSize);
+    const refCanvas = resizeToMax(state.refImg, Math.min(state.maxSize, 1024));
+    const srcData = srcCanvas.getContext('2d').getImageData(0, 0, srcCanvas.width, srcCanvas.height);
+    const refData = refCanvas.getContext('2d').getImageData(0, 0, refCanvas.width, refCanvas.height);
+
+    const t0 = performance.now();
+    const outData = vibeMatch(srcData, refData, state.strength, state.protectExposure);
+    const dt = Math.round(performance.now() - t0);
+
+    const resultCanvas = $('resultCanvas');
+    $('resultEmpty').style.display = 'none';
+    resultCanvas.style.display = 'block';
+    resultCanvas.width = outData.width;
+    resultCanvas.height = outData.height;
+    resultCanvas.getContext('2d').putImageData(outData, 0, 0);
+
+    // Keep original (at same resized size) for hover-compare
+    state.lastOriginalCanvas = srcCanvas;
+    const cc = $('compareCanvas');
+    cc.width = srcCanvas.width; cc.height = srcCanvas.height;
+    cc.getContext('2d').drawImage(srcCanvas, 0, 0);
+
+    $('downloadBtn').disabled = false;
+    $('compareHint').style.display = 'inline';
+    setStatus(`Done in ${dt} ms. Hold the result to see the original.`, 'ok');
+  } catch (err) {
+    console.error(err);
+    setStatus('Error: ' + (err.message || err), 'err');
+  } finally {
+    $('processBtn').disabled = false;
+  }
+});
+
+/* ---------- Press-and-hold compare ---------- */
+(function setupCompare() {
+  const wrap = $('resultWrap');
+  const cc = $('compareCanvas');
+  let active = false;
+  const show = () => { if (state.lastOriginalCanvas) { cc.style.display = 'block'; active = true; } };
+  const hide = () => { cc.style.display = 'none'; active = false; };
+  wrap.addEventListener('mousedown', show);
+  wrap.addEventListener('mouseup', hide);
+  wrap.addEventListener('mouseleave', hide);
+  wrap.addEventListener('touchstart', (e) => { show(); });
+  wrap.addEventListener('touchend', hide);
+  wrap.addEventListener('touchcancel', hide);
+})();
+
+/* ---------- Download ---------- */
+$('downloadBtn').addEventListener('click', () => {
+  const canvas = $('resultCanvas');
+  canvas.toBlob((blob) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    a.download = `vibe-matched-${ts}.png`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }, 'image/png');
+});
+
+
+/* ---------- Auto-scroll while dragging near viewport edges ----------
+ * Native HTML5 drag-and-drop doesn't auto-scroll like OS file drags. Without
+ * this, dragging a gallery thumb from the bottom up to the slots at the top
+ * gets stuck because the page never scrolls. We detect the cursor near the
+ * top/bottom of the viewport during dragover and scroll the page. */
+(function setupDragAutoScroll() {
+  const EDGE_PX = 90;          // how close to the edge before we start scrolling
+  const MAX_SPEED = 28;        // max px per frame
+  let rafId = null;
+  let scrollDelta = 0;
+
+  function tick() {
+    if (scrollDelta !== 0) {
+      window.scrollBy({ top: scrollDelta, left: 0, behavior: 'auto' });
+      rafId = requestAnimationFrame(tick);
+    } else {
+      rafId = null;
+    }
+  }
+
+  document.addEventListener('dragover', (e) => {
+    const y = e.clientY;
+    const h = window.innerHeight;
+    if (y < EDGE_PX) {
+      // Proportional speed: faster the closer to the edge
+      const p = Math.max(0, Math.min(1, (EDGE_PX - y) / EDGE_PX));
+      scrollDelta = -Math.round(MAX_SPEED * p);
+    } else if (y > h - EDGE_PX) {
+      const p = Math.max(0, Math.min(1, (y - (h - EDGE_PX)) / EDGE_PX));
+      scrollDelta = Math.round(MAX_SPEED * p);
+    } else {
+      scrollDelta = 0;
+    }
+    if (scrollDelta !== 0 && rafId === null) rafId = requestAnimationFrame(tick);
+  }, { passive: true });
+
+  const stop = () => { scrollDelta = 0; if (rafId) { cancelAnimationFrame(rafId); rafId = null; } };
+  document.addEventListener('drop',     stop);
+  document.addEventListener('dragend',  stop);
+  // dragleave fires a lot spuriously; only stop if leaving the window
+  document.addEventListener('dragleave', (e) => {
+    if (e.clientX <= 0 || e.clientY <= 0 ||
+        e.clientX >= window.innerWidth || e.clientY >= window.innerHeight) stop();
+  });
+})();
+</script>
+</body>
+</html>
